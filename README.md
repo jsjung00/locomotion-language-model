@@ -1,2 +1,2 @@
-# locomotion-language-model
-Small LLM 
+# Small-LLM (Locomotion Language Model)
+Small LLM for locomotion
