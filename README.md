@@ -1,6 +1,6 @@
 # Small-LLM (Locomotion Language Model)
 
-### Q: Can textual language models understand / reason about physics and locomotion?
+### Q: Can pre-trained textual language models effeciently learn physical locomotion dynamics? 
 
 Animals have knowledge regarding physics and locomotion
 
