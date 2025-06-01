@@ -22,7 +22,6 @@ class Trainer:
     def train_iteration(self, num_steps, iter_num=0, print_logs=False):
         train_losses = []
         logs = dict()
-
         train_start = time.time()
 
         self.model.train()

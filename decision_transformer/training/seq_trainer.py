@@ -9,7 +9,7 @@ class SequenceTrainer(Trainer):
         states, actions, rewards, dones, rtg, timesteps, attention_mask = self.get_batch(self.batch_size)
         action_target = torch.clone(actions)
 
-        state_preds, action_preds, reward_preds = self.model.forward(
+        _, action_preds, _ = self.model.forward(
             states, actions, rewards, rtg[:,:-1], timesteps, attention_mask=attention_mask,
         )
 

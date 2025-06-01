@@ -8,11 +8,41 @@ import argparse
 import pickle
 import random
 import sys
+import time
+import os 
+
+from finetune_llm.model import DTPythia
 
 from decision_transformer.evaluation.evaluate_episodes import evaluate_episode, evaluate_episode_rtg
 from decision_transformer.models.decision_transformer import DecisionTransformer
 from decision_transformer.training.act_trainer import ActTrainer
 from decision_transformer.training.seq_trainer import SequenceTrainer
+
+def model_summary(model):
+    print("="*50)
+    print("MODEL SUMMARY")
+    print("="*50)
+    
+    total_params = 0
+    trainable_params = 0
+    
+    for name, param in model.named_parameters():
+        param_count = param.numel()
+        total_params += param_count
+        
+        if param.requires_grad:
+            trainable_params += param_count
+            status = "✓"
+        else:
+            status = "✗"
+            
+        print(f"{status} {name:30} {str(param.shape):20} {param_count:>10,}")
+    
+    print("="*50)
+    print(f"Total parameters:     {total_params:>10,}")
+    print(f"Trainable parameters: {trainable_params:>10,}")
+    print(f"Non-trainable params: {(total_params - trainable_params):>10,}")
+    print("="*50)
 
 
 def discount_cumsum(x, gamma):
@@ -61,6 +91,7 @@ def experiment(
     # used for input normalization
     states = np.concatenate(states, axis=0)
     state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
+    breakpoint()
 
     num_timesteps = sum(traj_lens)
 
@@ -141,7 +172,7 @@ def experiment(
             returns, lengths = [], []
             for _ in range(num_eval_episodes):
                 with torch.no_grad():
-                    if model_type == 'dt':
+                    if model_type == 'dt' or model_type == "pythia":
                         ret, length = evaluate_episode_rtg(
                             env,
                             state_dim,
@@ -178,7 +209,16 @@ def experiment(
             }
         return fn
 
-    if model_type == 'dt':
+    if model_type == "pythia":
+        model = DTPythia(
+            pretrained_model_id='EleutherAI/pythia-410m',
+            state_dim=state_dim,
+            act_dim=act_dim,
+            max_length=K,
+            max_ep_len=max_ep_len
+        )
+
+    elif model_type == 'dt':
         model = DecisionTransformer(
             state_dim=state_dim,
             act_dim=act_dim,
@@ -198,6 +238,10 @@ def experiment(
 
     model = model.to(device=device)
 
+    model_summary(model)
+
+
+
     warmup_steps = variant['warmup_steps']
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -209,7 +253,7 @@ def experiment(
         lambda steps: min((steps+1)/warmup_steps, 1)
     )
 
-    if model_type == 'dt':
+    if model_type == "pythia" or model_type == 'dt':
         trainer = SequenceTrainer(
             model=model,
             optimizer=optimizer,
@@ -218,9 +262,10 @@ def experiment(
             scheduler=scheduler,
             loss_fn=lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((a_hat - a)**2),
             eval_fns=[eval_episodes(tar) for tar in env_targets],
-            eval_every_n_epochs=5
+            eval_every_n_epochs=10
         )
 
+    
     if log_to_wandb:
         wandb.init(
             name=exp_prefix,
@@ -230,8 +275,27 @@ def experiment(
         )
         # wandb.watch(model)  # wandb has some bug
 
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    run_folder = os.path.join("ckpts", ts)
+    os.makedirs(run_folder, exist_ok=True)
+
+    best_loss = float('inf')
+    best_path = None 
+
     for iter in range(variant['max_iters']):
         outputs = trainer.train_iteration(num_steps=variant['num_steps_per_iter'], iter_num=iter+1, print_logs=True)
+        action_error = outputs['training/action_error']
+        if action_error < best_loss:
+            best_loss = action_error
+            filename  = f"best_{model_type}_{iter+1:04d}.pth"
+            best_path = os.path.join(run_folder, filename)
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'iter': iter + 1,
+            }, best_path)
+
         if log_to_wandb:
             wandb.log(outputs)
 
@@ -241,21 +305,21 @@ if __name__ == '__main__':
     parser.add_argument('--env', type=str, default='halfcheetah')
     parser.add_argument('--dataset', type=str, default='medium')  # medium, medium-replay, medium-expert, expert
     parser.add_argument('--mode', type=str, default='normal')  # normal for standard setting, delayed for sparse
-    parser.add_argument('--K', type=int, default=128)
+    parser.add_argument('--K', type=int, default=64)
     parser.add_argument('--pct_traj', type=float, default=1.)
-    parser.add_argument('--batch_size', type=int, default=1028)
-    parser.add_argument('--model_type', type=str, default='dt')  # dt for decision transformer, bc for behavior cloning
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--model_type', type=str, default='pythia')  # dt for decision transformer, bc for behavior cloning
     parser.add_argument('--embed_dim', type=int, default=128)
     parser.add_argument('--n_layer', type=int, default=3)
     parser.add_argument('--n_head', type=int, default=1)
     parser.add_argument('--activation_function', type=str, default='relu')
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--learning_rate', '-lr', type=float, default=1e-3)
+    parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_steps', type=int, default=10000)
-    parser.add_argument('--num_eval_episodes', type=int, default=100)
-    parser.add_argument('--max_iters', type=int, default=10)
-    parser.add_argument('--num_steps_per_iter', type=int, default=100)
+    parser.add_argument('--num_eval_episodes', type=int, default=10)
+    parser.add_argument('--max_iters', type=int, default=1000)
+    parser.add_argument('--num_steps_per_iter', type=int, default=100) # 100
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--log_to_wandb', '-w', type=bool, default=True)
     

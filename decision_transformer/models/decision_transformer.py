@@ -52,7 +52,6 @@ class DecisionTransformer(TrajectoryModel):
         self.predict_return = torch.nn.Linear(hidden_size, 1)
 
     def forward(self, states, actions, rewards, returns_to_go, timesteps, attention_mask=None):
-
         batch_size, seq_length = states.shape[0], states.shape[1]
 
         if attention_mask is None:
@@ -95,7 +94,7 @@ class DecisionTransformer(TrajectoryModel):
 
         # get predictions
         return_preds = self.predict_return(x[:,2])  # predict next return given state and action
-        state_preds = self.predict_state(x[:,2])    # predict next state given state and action
+        state_preds = self.predict_state(x[:,2])    # predict next state given state and action #TODO: bug here? only extract the second dim 
         action_preds = self.predict_action(x[:,1])  # predict next action given state
 
         return state_preds, action_preds, return_preds
