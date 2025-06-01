@@ -9,6 +9,32 @@ import random
 
 os.environ["MUJOCO_GL"] = "egl"
 
+def model_summary(model):
+    print("="*50)
+    print("MODEL SUMMARY")
+    print("="*50)
+    
+    total_params = 0
+    trainable_params = 0
+    
+    for name, param in model.named_parameters():
+        param_count = param.numel()
+        total_params += param_count
+        
+        if param.requires_grad:
+            trainable_params += param_count
+            status = "✓"
+        else:
+            status = "✗"
+            
+        print(f"{status} {name:30} {str(param.shape):20} {param_count:>10,}")
+    
+    print("="*50)
+    print(f"Total parameters:     {total_params:>10,}")
+    print(f"Trainable parameters: {trainable_params:>10,}")
+    print(f"Non-trainable params: {(total_params - trainable_params):>10,}")
+    print("="*50)
+
 
 def load_decision_transformer(checkpoint_path, device="cuda"):
     model_kwargs = {
@@ -28,12 +54,14 @@ def load_decision_transformer(checkpoint_path, device="cuda"):
 
     model = DecisionTransformer(**model_kwargs)
 
-
     checkpoint_items = torch.load(checkpoint_path)
     model.load_state_dict(checkpoint_items['model_state_dict'])
     #model.load_state_dict(torch.load(checkpoint_path))
     model.to(device)
     model.eval()
+    
+    model_summary(model)
+
     return model 
 
 @torch.no_grad
