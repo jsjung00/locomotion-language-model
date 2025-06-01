@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import minari 
 from decision_transformer.models.decision_transformer import DecisionTransformer
+from finetune_llm.model import DTPythia
 import imageio 
 import random 
 
@@ -35,6 +36,27 @@ def model_summary(model):
     print(f"Non-trainable params: {(total_params - trainable_params):>10,}")
     print("="*50)
 
+def load_pythia(checkpoint_path, device="cuda"):
+    model_kwargs = {
+        "state_dim": 17,
+        "act_dim" : 6,
+        "max_length" : 64, 
+        "max_ep_len": 1000
+    }
+
+    model = DTPythia(
+            pretrained_model_id='EleutherAI/pythia-410m',
+            **model_kwargs
+    )
+    checkpoint_items = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint_items['model_state_dict'])
+    #model.load_state_dict(torch.load(checkpoint_path))
+    model.to(device)
+    model.eval()
+    
+    #model_summary(model)
+    return model 
+
 
 def load_decision_transformer(checkpoint_path, device="cuda"):
     model_kwargs = {
@@ -60,13 +82,13 @@ def load_decision_transformer(checkpoint_path, device="cuda"):
     model.to(device)
     model.eval()
     
-    model_summary(model)
+    #model_summary(model)
 
     return model 
 
 @torch.no_grad
 def rollout_dt_actions(dataset_name, model, device="cuda", save_path=None, state_dim=17,\
-    act_dim=6, max_ep_len=1000, scale=1000, target_rew=600):
+    act_dim=6, max_ep_len=1000, scale=1000, target_rew=1200):
     model.eval()
     model.to(device=device)
 
@@ -148,7 +170,7 @@ def rollout_dt_actions(dataset_name, model, device="cuda", save_path=None, state
 
     return actions_np
 
-def replay_offscreen(dataset_name, action_array, fps=30, out_path="cheetah.mp4"):
+def replay_offscreen(dataset_name, action_array, fps=20, out_path="cheetah.mp4"):
     dataset = minari.load_dataset('mujoco/halfcheetah/expert-v0')
     env  = dataset.recover_environment(render_mode="rgb_array")
 
@@ -168,12 +190,27 @@ def replay_offscreen(dataset_name, action_array, fps=30, out_path="cheetah.mp4")
 
     # Write to an MP4 file with your chosen fps
     imageio.mimwrite(out_path, np.asarray(frames), fps=fps)
-    print(f"Saved video to {out_path}")
+    print(f"\n<<< Saved video to {out_path} >>>\n")
+
+def viz_driver(model_type, target_rew=1200):
+    if model_type == "dt":
+        model = load_decision_transformer('/home/ubuntu/small-llm/test-decision-transformer/ckpts/best_dt_0056.pth') 
+        np_actions = rollout_dt_actions('mujoco/halfcheetah/expert-v0', model, max_ep_len=100, target_rew=target_rew)
+    elif model_type == "pythia":
+        model = load_pythia("/home/ubuntu/small-llm/test-decision-transformer/ckpts/20250601_032836/best_pythia_0033.pth") 
+        np_actions = rollout_dt_actions('mujoco/halfcheetah/expert-v0', model, max_ep_len=100, target_rew=target_rew)
+    elif model_type == "pythia-large":
+        pass 
+    else:
+        raise ValueError("Only have dt, pythia, pythia-large model types") 
+
+    replay_offscreen('mujoco/halfcheetah/expert-v0', np_actions, out_path=os.path.join("/home/ubuntu/small-llm/test-decision-transformer/saved_vids", f"{model_type}_targetreward_{target_rew}_cheetah_{random.randint(0,100000)}.mp4"))
 
 if __name__ == "__main__":
-    dt_model = load_decision_transformer('/home/ubuntu/small-llm/test-decision-transformer/ckpts/best_dt_0056.pth')
-    np_actions = rollout_dt_actions('mujoco/halfcheetah/expert-v0', dt_model, max_ep_len=100)
+    viz_driver("pythia")
+    ##dt_model = load_decision_transformer('/home/ubuntu/small-llm/test-decision-transformer/ckpts/best_dt_0056.pth')
+    #np_actions = rollout_dt_actions('mujoco/halfcheetah/expert-v0', dt_model, max_ep_len=100)
 
-    replay_offscreen('mujoco/halfcheetah/expert-v0', np_actions, out_path=os.path.join("/home/ubuntu/small-llm/test-decision-transformer/saved_vids", f"dt_cheetah_{random.randint(0,100000)}.mp4"))
+    #replay_offscreen('mujoco/halfcheetah/expert-v0', np_actions, out_path=os.path.join("/home/ubuntu/small-llm/test-decision-transformer/saved_vids", f"dt_cheetah_{random.randint(0,100000)}.mp4"))
 
 

@@ -4,12 +4,15 @@ import numpy as np
 import torch
 import wandb
 
+from tqdm import tqdm 
+
 import argparse
 import pickle
 import random
 import sys
 import time
 import os 
+from visualize import load_decision_transformer, load_pythia
 
 from finetune_llm.model import DTPythia
 
@@ -91,7 +94,6 @@ def experiment(
     # used for input normalization
     states = np.concatenate(states, axis=0)
     state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
-    breakpoint()
 
     num_timesteps = sum(traj_lens)
 
@@ -170,7 +172,7 @@ def experiment(
     def eval_episodes(target_rew):
         def fn(model):
             returns, lengths = [], []
-            for _ in range(num_eval_episodes):
+            for _ in tqdm(range(num_eval_episodes)):
                 with torch.no_grad():
                     if model_type == 'dt' or model_type == "pythia":
                         ret, length = evaluate_episode_rtg(
@@ -240,8 +242,6 @@ def experiment(
 
     model_summary(model)
 
-
-
     warmup_steps = variant['warmup_steps']
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -265,39 +265,61 @@ def experiment(
             eval_every_n_epochs=10
         )
 
-    
-    if log_to_wandb:
-        wandb.init(
-            name=exp_prefix,
-            group=group_name,
-            project='decision-transformer',
-            config=variant
-        )
-        # wandb.watch(model)  # wandb has some bug
+    eval_only = variant.get('eval', False)
 
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    run_folder = os.path.join("ckpts", ts)
-    os.makedirs(run_folder, exist_ok=True)
-
-    best_loss = float('inf')
-    best_path = None 
-
-    for iter in range(variant['max_iters']):
-        outputs = trainer.train_iteration(num_steps=variant['num_steps_per_iter'], iter_num=iter+1, print_logs=True)
-        action_error = outputs['training/action_error']
-        if action_error < best_loss:
-            best_loss = action_error
-            filename  = f"best_{model_type}_{iter+1:04d}.pth"
-            best_path = os.path.join(run_folder, filename)
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'iter': iter + 1,
-            }, best_path)
-
+    if not eval_only:
         if log_to_wandb:
-            wandb.log(outputs)
+            wandb.init(
+                name=exp_prefix,
+                group=group_name,
+                project='decision-transformer',
+                config=variant
+            )
+            # wandb.watch(model)  # wandb has some bug
+
+
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        run_folder = os.path.join("ckpts", ts)
+        os.makedirs(run_folder, exist_ok=True)
+
+        best_loss = float('inf')
+        best_path = None 
+
+        for iter in range(variant['max_iters']):
+            outputs = trainer.train_iteration(num_steps=variant['num_steps_per_iter'], iter_num=iter+1, print_logs=True)
+            action_error = outputs['training/action_error']
+            if action_error < best_loss:
+                best_loss = action_error
+                filename  = f"best_{model_type}_{iter+1:04d}.pth"
+                best_path = os.path.join(run_folder, filename)
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'iter': iter + 1,
+                }, best_path)
+
+            if log_to_wandb:
+                wandb.log(outputs)
+    else:
+        # evaluate the model 
+        reward_target = variant.get('reward_target', 1200)
+        eval_fn = eval_episodes(reward_target)
+        
+
+        if model_type == "dt":
+            model = load_decision_transformer('/home/ubuntu/small-llm/test-decision-transformer/ckpts/best_dt_0056.pth')  
+        elif model_type == "pythia":
+            model = load_pythia("/home/ubuntu/small-llm/test-decision-transformer/ckpts/20250601_032836/best_pythia_0033.pth") 
+        else:
+            raise ValueError("only accept dt and pythia")
+            pass
+
+        outputs = eval_fn(model)
+        for k, v in outputs.items():
+            print(f'evaluation/{k} = {v}')
+
+        return 
 
 
 if __name__ == '__main__':
@@ -317,11 +339,13 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', '-wd', type=float, default=1e-4)
     parser.add_argument('--warmup_steps', type=int, default=10000)
-    parser.add_argument('--num_eval_episodes', type=int, default=10)
+    parser.add_argument('--num_eval_episodes', type=int, default=32)
     parser.add_argument('--max_iters', type=int, default=1000)
     parser.add_argument('--num_steps_per_iter', type=int, default=100) # 100
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--log_to_wandb', '-w', type=bool, default=True)
+    parser.add_argument('--eval', default=False)
+    parser.add_argument('--reward_target', type=int, default=1200)
     
     args = parser.parse_args()
 
